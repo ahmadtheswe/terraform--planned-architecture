@@ -3,116 +3,118 @@ provider "aws" {
 }
 
 # Create a VPC
-resource "aws_vpc" "main_vpc" {
+resource "aws_vpc" "backend_app_vpc" {
   cidr_block = var.vpc_cidr
 
   tags = {
-    Name = "main-vpc"
+    Name = "backend-app-vpc"
   }
 }
 
 # Create public subnets
-resource "aws_subnet" "public_subnets" {
+resource "aws_subnet" "backend_app_public_subnets" {
   count                   = length(var.public_subnets_cidr)
-  vpc_id                  = aws_vpc.main_vpc.id
+  vpc_id                  = aws_vpc.backend_app_vpc.id
   cidr_block              = element(var.public_subnets_cidr, count.index)
   availability_zone       = element(var.azs, count.index)
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "public-subnet-${count.index + 1}"
+    Name = "backend-app-public-subnet-${count.index + 1}"
   }
 }
 
 # Create private subnets
-resource "aws_subnet" "private_subnets" {
+resource "aws_subnet" "backend_app_private_subnets" {
   count             = length(var.private_subnets_cidr)
-  vpc_id            = aws_vpc.main_vpc.id
+  vpc_id            = aws_vpc.backend_app_vpc.id
   cidr_block        = element(var.private_subnets_cidr, count.index)
   availability_zone = element(var.azs, count.index)
 
   tags = {
-    Name = "private-subnet-${count.index + 1}"
+    Name = "backend-app-private-subnet-${count.index + 1}"
   }
 }
 
 # Create an Internet Gateway
-resource "aws_internet_gateway" "main_igw" {
-  vpc_id = aws_vpc.main_vpc.id
+resource "aws_internet_gateway" "backend_app_igw" {
+  vpc_id = aws_vpc.backend_app_vpc.id
 
   tags = {
-    Name = "main-igw"
+    Name = "backend-app-igw"
   }
 }
 
 # Create a route table for public subnets
-resource "aws_route_table" "second_route_table" {
-  vpc_id = aws_vpc.main_vpc.id
+resource "aws_route_table" "backend_app_public_route_table" {
+  vpc_id = aws_vpc.backend_app_vpc.id
 
   route {
     cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.main_igw.id
+    gateway_id = aws_internet_gateway.backend_app_igw.id
   }
 
   tags = {
-    Name = "second-route-table"
+    Name = "backend-app-public-route-table"
   }
 }
 
 # Associate public subnets with the route table
-resource "aws_route_table_association" "public_subnet_association" {
+resource "aws_route_table_association" "backend_app_public_subnet_association" {
   count          = length(var.public_subnets_cidr)
-  subnet_id      = element(aws_subnet.public_subnets[*].id, count.index)
-  route_table_id = aws_route_table.second_route_table.id
+  subnet_id      = element(aws_subnet.backend_app_public_subnets[*].id, count.index)
+  route_table_id = aws_route_table.backend_app_public_route_table.id
 }
 
 # Create Elastic IP for NAT Gateway
-resource "aws_eip" "nat" {
+resource "aws_eip" "backend_app_nat_eip" {
   domain = "vpc"
-  
+
   tags = {
-    Name = "nat-eip"
+    Name = "backend-app-nat-eip"
   }
 }
 
 # Create NAT Gateway
-resource "aws_nat_gateway" "main_nat" {
-  allocation_id = aws_eip.nat.id
-  subnet_id     = aws_subnet.public_subnets[0].id
-  
+resource "aws_nat_gateway" "backend_app_nat_gateway" {
+  allocation_id = aws_eip.backend_app_nat_eip.id
+  subnet_id     = aws_subnet.backend_app_public_subnets[0].id
+  connectivity_type = "public"
+
   tags = {
-    Name = "main-nat-gateway"
+    Name = "backend-app-nat-gateway"
   }
-  
-  depends_on = [aws_internet_gateway.main_igw]
+
+  depends_on = [aws_internet_gateway.backend_app_igw]
 }
 
-# Create route table for private subnets
-resource "aws_route_table" "private_route_table" {
-  vpc_id = aws_vpc.main_vpc.id
-  
+# Modify the default route table for private subnets
+resource "aws_default_route_table" "backend_app_default_rt" {
+  default_route_table_id = aws_vpc.backend_app_vpc.default_route_table_id
+
   route {
     cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main_nat.id
+    nat_gateway_id = aws_nat_gateway.backend_app_nat_gateway.id
   }
-  
+
   tags = {
-    Name = "private-route-table"
+    Name = "backend-app-default-route-table"
   }
 }
 
-# Associate private subnets with the private route table
-resource "aws_route_table_association" "private_subnet_association" {
-  count          = length(var.private_subnets_cidr)
-  subnet_id      = element(aws_subnet.private_subnets[*].id, count.index)
-  route_table_id = aws_route_table.private_route_table.id
-}
+# No explicit associations needed - private subnets will use the default route table
+# Comment out or remove the explicit associations
+# resource "aws_route_table_association" "backend_app_private_subnet_association" {
+#   count          = length(var.private_subnets_cidr)
+#   subnet_id      = element(aws_subnet.backend_app_private_subnets[*].id, count.index)
+#   route_table_id = aws_route_table.backend_app_private_route_table.id
+# }
 
 # Security Group for ALB
-resource "aws_security_group" "alb_sg" {
-  name        = "alb-security-group"
+resource "aws_security_group" "backend_app_alb_sg" {
+  name        = "backend-app-alb-security-group"
   description = "Security group for ALB"
-  vpc_id      = aws_vpc.main_vpc.id
+  vpc_id      = aws_vpc.backend_app_vpc.id
 
   ingress {
     from_port   = 80
@@ -129,21 +131,21 @@ resource "aws_security_group" "alb_sg" {
   }
 
   tags = {
-    Name = "alb-security-group"
+    Name = "backend-app-alb-security-group"
   }
 }
 
 # Security Group for EC2 instances
-resource "aws_security_group" "ec2_sg" {
-  name        = "ec2-security-group"
+resource "aws_security_group" "backend_app_ec2_sg" {
+  name        = "backend-app-ec2-security-group"
   description = "Security group for EC2 instances"
-  vpc_id      = aws_vpc.main_vpc.id
+  vpc_id      = aws_vpc.backend_app_vpc.id
 
   ingress {
     from_port       = 80
     to_port         = 80
     protocol        = "tcp"
-    security_groups = [aws_security_group.alb_sg.id]
+    security_groups = [aws_security_group.backend_app_alb_sg.id]
     description     = "Allow HTTP traffic from ALB"
   }
 
@@ -164,29 +166,29 @@ resource "aws_security_group" "ec2_sg" {
   }
 
   tags = {
-    Name = "ec2-security-group"
+    Name = "backend-app-ec2-security-group"
   }
 }
 
 # Application Load Balancer
-resource "aws_lb" "app_lb" {
-  name               = "application-lb"
+resource "aws_lb" "backend_app_lb" {
+  name               = "backend-app-lb"
   internal           = false
   load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb_sg.id]
-  subnets            = aws_subnet.public_subnets[*].id
+  security_groups    = [aws_security_group.backend_app_alb_sg.id]
+  subnets            = aws_subnet.backend_app_public_subnets[*].id
 
   tags = {
-    Name = "application-lb"
+    Name = "backend-app-lb"
   }
 }
 
 # Target Group
-resource "aws_lb_target_group" "app_tg" {
-  name     = "app-target-group"
+resource "aws_lb_target_group" "backend_app_tg" {
+  name     = "backend-app-target-group"
   port     = 80
   protocol = "HTTP"
-  vpc_id   = aws_vpc.main_vpc.id
+  vpc_id   = aws_vpc.backend_app_vpc.id
 
   health_check {
     enabled             = true
@@ -201,133 +203,78 @@ resource "aws_lb_target_group" "app_tg" {
 }
 
 # Listener
-resource "aws_lb_listener" "front_end" {
-  load_balancer_arn = aws_lb.app_lb.arn
+resource "aws_lb_listener" "backend_app_listener" {
+  load_balancer_arn = aws_lb.backend_app_lb.arn
   port              = "80"
   protocol          = "HTTP"
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.app_tg.arn
+    target_group_arn = aws_lb_target_group.backend_app_tg.arn
   }
 }
 
 # Launch Template
-resource "aws_launch_template" "app_template" {
-  name_prefix   = "app-template"
+resource "aws_launch_template" "backend_app_template" {
+  name_prefix   = "backend-app-template"
   image_id      = var.ami_id
   instance_type = var.instance_type
 
-  vpc_security_group_ids = [aws_security_group.ec2_sg.id]
+  vpc_security_group_ids = [aws_security_group.backend_app_ec2_sg.id]
 
-  user_data = base64encode(<<-EOF
-              #!/bin/bash
-              # Redirect output to log file and console
-              exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
-              
-              echo "===== STARTING USER DATA SCRIPT ====="
-              echo "Hostname: $(hostname -f)"
-              echo "Date: $(date)"
-              
-              # Test internet connectivity
-              echo "===== TESTING INTERNET CONNECTIVITY ====="
-              echo "Testing connection to amazon.com..."
-              ping -c 2 amazon.com
-              if [ $? -eq 0 ]; then
-                echo "✅ Internet connectivity confirmed"
-              else
-                echo "❌ Internet connectivity failed"
-                echo "Trying to connect to 8.8.8.8..."
-                ping -c 2 8.8.8.8
-              fi
-              
-              # Check DNS resolution
-              echo "===== TESTING DNS RESOLUTION ====="
-              nslookup amazon.com
-              
-              # Install and configure web server
-              echo "===== INSTALLING AND CONFIGURING WEB SERVER ====="
-              echo "Updating packages..."
-              yum update -y
-              if [ $? -eq 0 ]; then
-                echo "✅ Package update successful"
-              else
-                echo "❌ Package update failed"
-              fi
-              
-              echo "Installing Apache..."
-              yum install -y httpd
-              if [ $? -eq 0 ]; then
-                echo "✅ Apache installation successful"
-              else
-                echo "❌ Apache installation failed"
-              fi
-              
-              echo "Starting Apache..."
-              systemctl start httpd
-              systemctl enable httpd
-              systemctl status httpd
-              
-              echo "Creating index page..."
-              cat > /var/www/html/index.html << 'HTML'
-              <!DOCTYPE html>
-              <html>
-              <head>
-                <title>EC2 Instance Health Check</title>
-                <style>
-                  body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
-                  h1 { color: #333; }
-                  .info { background: #f4f4f4; padding: 20px; border-radius: 5px; }
-                </style>
-              </head>
-              <body>
-                <h1>Welcome to $(hostname -f)</h1>
-                <div class="info">
-                  <p><strong>Instance ID:</strong> $(curl -s http://169.254.169.254/latest/meta-data/instance-id)</p>
-                  <p><strong>Availability Zone:</strong> $(curl -s http://169.254.169.254/latest/meta-data/placement/availability-zone)</p>
-                  <p><strong>Private IP:</strong> $(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)</p>
-                  <p><strong>Server Time:</strong> $(date)</p>
-                </div>
-                <p>If you can see this page, the web server is running correctly and the instance has internet connectivity.</p>
-              </body>
-              </html>
-              HTML
-              
-              echo "===== USER DATA SCRIPT COMPLETED ====="
-              EOF
-  )
+  # user_data = base64encode(<<-EOF
+  #             #!/bin/bash
+  #             # Update all installed packages
+  #             sudo yum update -y
+
+  #             # Install Apache HTTP Server
+  #             sudo yum install -y httpd
+
+  #             # Start the Apache service
+  #             sudo systemctl start httpd
+
+  #             # Enable Apache to start on boot
+  #             sudo systemctl enable httpd
+
+  #             # Get the instance's hostname
+  #             HOSTNAME=$(hostname)
+
+  #             # Create a simple index.html file with the hostname
+  #             echo "<h1>Hello from EC2 instance: $HOSTNAME</h1>" | sudo tee /var/www/html/index.html
+  #             EOF
+  # )
 
   tag_specifications {
     resource_type = "instance"
     tags = {
-      Name = "app-server"
+      Name = "backend-app-server"
     }
   }
 }
 
 # Auto Scaling Group
-resource "aws_autoscaling_group" "app_asg" {
+resource "aws_autoscaling_group" "backend_app_asg" {
   desired_capacity    = var.asg_desired_capacity
   max_size            = var.alb_max_size
   min_size            = var.alb_min_size
-  target_group_arns   = [aws_lb_target_group.app_tg.arn]
-  vpc_zone_identifier = aws_subnet.private_subnets[*].id
+  target_group_arns   = [aws_lb_target_group.backend_app_tg.arn]
+  vpc_zone_identifier = aws_subnet.backend_app_private_subnets[*].id
 
   launch_template {
-    id      = aws_launch_template.app_template.id
+    id      = aws_launch_template.backend_app_template.id
     version = "$Latest"
   }
 
   tag {
     key                 = "Name"
-    value               = "app-server"
+    value               = "backend-app-server"
     propagate_at_launch = true
   }
 }
 
 # Output ALB DNS name
-output "alb_dns_name" {
-  value       = aws_lb.app_lb.dns_name
+output "backend_app_lb_dns_name" {
+  value       = aws_lb.backend_app_lb.dns_name
   description = "The DNS name of the Application Load Balancer"
 }
 
